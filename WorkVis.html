@@ -1,0 +1,1113 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <title>Workflow Visualization Tool</title>
+
+  <style type="text/css">
+    body, html {
+      font-family: sans-serif;
+    }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.20.0/vis.min.js"></script>
+  <script src="https://unpkg.com/simple-statistics@4.1.0/dist/simple-statistics.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.20.0/vis.min.css" rel="stylesheet" type="text/css" />
+</head>
+    <body>
+		<input type="file" id="files" name="files[]" multiple />
+		<output id="list"></output>
+
+		<div id="info"></div>
+		
+		<div id="options">
+			<h4>Options</h4>
+			<label><input type="checkbox" id="testview" onchange="toggleView(this)"/>Toggle test view</label>
+			<br>
+			<label><input type="checkbox" id="statsview" onchange="toggleColor(this)"/>Toggle statistics view</label>
+		</div>
+		
+		<div id="timeform"></div>
+		
+		<div id="reset"></div>
+		
+		<div id="statereset"></div>
+		
+		<div id="States" >
+			<br>States to view
+		</div>				
+		
+        <div id="timeline" style="height: 94%;"></div>
+		
+		<script>		
+			// dictionary containing all of the state merging rules
+			statesDict = {};
+			
+			// list containing the desired order of the different event types
+			groupOrder = [];
+			
+			hardwareList = [];
+			
+			var workflowdata;
+			
+			// listens for added files
+			document.getElementById('files').addEventListener('change', handleFileSelect, false);
+			
+			// processes the added files
+			function handleFileSelect(evt) 
+			{
+				// reset the form to clear old timelines
+				document.getElementById('timeline').innerHTML = "";
+				document.getElementById('info').innerHTML = "";
+				
+			// ERROR HANDLING
+				// browser error
+				if (typeof window.FileReader !== 'function') 
+				{
+					alert("The file API isn't supported on this browser yet.");
+					return;
+				}
+				
+				// file input error
+				input = document.getElementById('files');	
+				if (!input) 
+				{
+					alert("Could not the files element.");
+				}
+				else if (!input.files) 
+				{
+					alert("This browser doesn't seem to support the `files` property of file inputs.");
+				}
+				else if (!input.files[0]) 
+				{
+					alert("Please select a file");
+				}
+				else 	// FILE HANDLING
+				{
+					var files = evt.target.files; // FileList object
+					
+					// check that only two files were chosen
+					if (files.length != 2)
+					{
+						alert("Please select two files");
+						return;
+					}
+					
+					// List some properties. Select the XML and JSON files
+					var output = [];
+					var config, file_type;
+					
+					for (var i = 0, f; f = files[i]; i++) 
+					{
+						// javascript has trouble recognized JSON files
+						file_type = f.type
+						
+						// has no file type
+						if (!file_type)
+						{
+							// extract the file extension
+							var extension = ((f.name).split("."))[1]; 
+							if (extension == "json")
+							{
+								file_type = "application/json";
+							}
+							else
+							{
+								file_type = "n/a";
+							}
+						} 
+						
+						// file info output
+						output.push('<li><strong>', f.name, '</strong> (', file_type, ') - ',
+						    f.size, ' bytes, last modified: ',
+						    f.lastModifiedDate ? f.lastModifiedDate.toLocaleDateString() : 'n/a',
+						    '</li>');
+						
+						// assign the first XML file as the configuration file and the first JSON file as the workflow data file
+						if (!config && f.type == "text/xml")
+						{
+							config = f;
+						}
+						else if (!workflowdata && file_type == "application/json")
+						{
+							workflowdata = f;
+						}
+					}
+					
+					// check that an XML configuration file and a JSON file were selected
+					if (!config)
+					{
+						alert("Please select an XML configuration file");
+						return;
+					}
+					
+					if (!workflowdata)
+					{
+						alert("Please select a JSON workflow data file");
+						return;
+					}		
+					
+					// display the file info
+					document.getElementById('list').innerHTML = '<ul>' + output.join('') + '</ul>';
+					
+					loadConfigurations(config);
+					createTimeline(workflowdata);
+				}
+			}	
+			
+			// opens the XML configuration file and parses it
+			function loadConfigurations(config) 
+			{
+				console.log("Started parsing the XML at " + new Date());
+				
+				var parser = new DOMParser();
+				var fileReader = new FileReader();
+				fileReader.onload = parseXML;
+				fileReader.readAsText(config);
+				
+				// parses the XML configuration file and loads the contents into memory
+				function parseXML()
+				{
+					doc = parser.parseFromString(fileReader.result, "text/xml");
+					
+					// state merging definitions
+					var states = doc.getElementsByTagName("state");
+					for (i = 0; i < states.length; i++) 
+					{
+						state = states[i];
+						
+						// state.name.text.value
+						var superstate = state.getElementsByTagName("name")[0].childNodes[0].nodeValue;
+						var substates = state.getElementsByTagName("substate");
+						
+						// populate each substate with the corresponding superstate
+						for (j = 0; j < substates.length; j++)
+						{
+							// substate.text.value
+							substate = substates[j].childNodes[0].nodeValue;
+							statesDict[substate] = superstate;
+						}
+					}
+					
+					// event type display order defintions
+					var events = doc.getElementsByTagName("event");
+					for (i = 0; i < events.length; i++)
+					{
+						// event.text.value
+						groupOrder.push(events[i].childNodes[0].nodeValue);
+					}
+					
+					var hardware = doc.getElementsByTagName("id")
+					for (i = 0; i < hardware.length; i++)
+					{
+						hardwareList.push(hardware[i].childNodes[0].nodeValue);
+					}
+					
+					console.log(hardwareList);
+					console.log("Finished parsing the XML at " + new Date());
+				}
+			}
+			
+			// creates the timeline by parsing the JSON input file
+			function createTimeline(workflowdata)
+			{
+				console.log("Started creating the timeline at " + new Date());
+				
+				var parser = new DOMParser();
+				var fileReader = new FileReader();
+				fileReader.onload = parseJSON;
+				fileReader.readAsText(workflowdata);
+				
+				console.log("Finished creating the timeline at " + new Date());
+				
+				// parse the JSON input file
+				function parseJSON(loadedEvent)
+				{
+					var groupColumn = 3;
+					var contentColumn = 3;
+					var testview = document.getElementById('testview');
+					if(testview.checked)
+					{
+						groupColumn = 0;
+						contentColumn = 2;
+					}
+					
+					var lines = loadedEvent.target.result.split(/[\r\n]+/g); // tolerate both Windows and Unix linebreaks
+					
+					// PARSE THE JSON FILE
+					var rows = []; // parsed data file
+					var events = {}; // dictionary (key: the_state_name value: dictionary (key: event_type value: array of items that contain both keys)
+					var ids = {}; // dictionary (key: id_string value: array of items with id)
+					states = {}; // dictionary (key: the_state_name value: array of duration of each state)
+					
+					for(var i = 0; i < lines.length; i++)
+					{
+						if (lines[i].length > 0)
+						{
+							var row = JSON.parse( lines[i], dateTimeReviver );
+							groupColumn = isHardware(row[0].v);
+								
+							var duplicate = false;
+							
+							// MERGE DUPLICATE STATES
+							var matches;
+							if (events[row[1].v])
+							{
+								matches = (events[row[1].v])[row[groupColumn].v];
+							}
+							
+							if (matches)
+							{
+								for (j = 0; j < matches.length; j++)
+								{
+									if (row[0].v == matches[j][0].v && row[1].v == matches[j][1].v)
+									{
+										var overlap = false;
+										if (row[4].v == matches[j][4].v)
+										{
+											overlap = true;
+										}
+										else if (row[4].v < matches[j][4].v)
+										{
+											overlap = (matches[j][4].v - row[5].v) < 1000;
+										}
+										else
+										{
+											overlap = (row[4].v - matches[j][5].v) < 1000;
+										}
+										
+										if(overlap)
+										{
+											matches[j][4].v = Math.min(row[4].v, matches[j][4].v)
+											matches[j][5].v = Math.max(row[5].v, matches[j][5].v)
+											
+											duplicate = true;
+											break;
+										}
+									}
+								}
+							}
+							
+							if(!duplicate)
+							{
+								// add the row to the look up table
+								if (!(row[1].v in events))
+								{
+									events[row[1].v] = {};
+								}
+																
+								if (!(row[groupColumn].v in events[row[1].v]))
+								{
+									(events[row[1].v])[row[groupColumn].v] = [];
+								}
+								
+								(events[row[1].v])[row[groupColumn].v].push(row);
+								
+								if (!(row[0].v in ids))
+								{
+									ids[row[0].v] = [];
+								}
+								
+								(ids[row[0].v]).push(row);
+								
+								if (!(row[1].v in states))
+								{
+									states[row[1].v] = [];
+								}
+								
+								states[row[1].v].push(row[5].v - row[4].v);
+
+								rows.push(row);
+							}
+						}
+					}
+
+					// backfill the empty categories of certain states i.e Ready
+					for (i = 0; i < rows.length; i++) 
+					{
+					    row = rows[i];
+					    if (!row[2].v || !row[3].v)
+					    {	
+							var ident = row[0].v;
+							var matches = ids[ident];
+							
+							if (matches)
+							{
+								for (var j = 0; j < matches.length; j++) 
+								{
+									var row2 = matches[j];
+									if (row2[0].v == ident && row2[2].v && row2[3].v)
+									{
+										row[2].v = row2[2].v;
+										row[3].v = row2[3].v;
+										break;
+									}
+									
+									// got to the end and didn't find anything
+									if (j == matches.length - 1 && !row[3].v && row[2].v)
+									{
+										row[3].v = row[2].v;
+									}
+								}
+							}
+					    }
+					}
+					
+					console.log("Finished loading and cleaning the data" + new Date());
+					
+					// generate the initial list of groups
+					groups = new vis.DataSet();
+					var idContent = {};
+					testRow = {};
+					
+					for (i = 0; i < rows.length; i++)
+					{
+						var row = rows[i];
+						groupColumn = isHardware(row[0].v);
+						
+						// check that it does not already exist
+						if (!groups.get(row[groupColumn].v))
+						{
+							var group = {id: row[groupColumn].v, content: row[contentColumn].v};
+							groups.add(group);
+							idContent[group.id] = group.content;
+							if (groupColumn == 0)
+							{
+								// individual test
+								testRow[group.id] = row[3].v;
+							}
+						}
+					}
+
+					console.log("Finished creating the first list of groups" + new Date());
+					var time = 0;
+					// generate the list of items and groups for the timeline
+					items = new vis.DataSet();
+					var id = 1;
+					var superitems = {};
+					var groupsDict = {};
+					
+					for (i = 0; i < rows.length; i++)
+					{
+						var row = rows[i];
+						groupColumn = isHardware(row[0].v);
+						
+						if (!isNaN(row[4].v))
+						{
+							row[4].v = new Date(row[4].v);
+						}
+						if (!isNaN(row[5].v))
+						{
+							row[5].v = new Date(row[5].v);
+						}
+						
+						// normal state
+						if (!statesDict[row[1].v])
+						{
+							var tooltip = row[1].v + "<br><br>" + "Start: " + row[4].v + "<br>End: " + row[5].v + "<br>Duration: " + (row[5].v - row[4].v) + " ms";
+							var item = {id: id, content: row[1].v, title: tooltip, group: row[groupColumn].v, subgroup: '1', start: row[4].v, end: row[5].v};
+							id++;
+							items.add(item);
+							
+							if (!(item.group in groupsDict))
+							{
+								groupsDict[item.group] = new vis.DataSet();
+							}
+							
+							groupsDict[item.group].add(item);
+						}
+						// substate
+						else
+						{
+							var start = new Date();
+							
+							// create substate item
+							var groupid = "Expanded" + row[groupColumn].v
+							var tooltip = row[1].v + "<br><br>" + "Start: " + row[4].v + "<br>End: " + row[5].v + "<br>Duration: " + (row[5].v - row[4].v) + " ms";
+							
+							item  = {id: id, content: row[1].v, title: tooltip, group: groupid, subgroup: '1', start: row[4].v, end: row[5].v};
+							items.add(item);
+							
+							if (!(item.group in groupsDict))
+							{
+								groupsDict[item.group] = new vis.DataSet();
+							}
+							
+							groupsDict[item.group].add(item);
+							
+							id++;
+							
+							// create the expanded subgroup if it does not exist
+							var subgroup = {id: groupid, content: "Expanded", visible: false};
+							groups.update(subgroup);
+							
+							// create the superstate item or update it if it already exists
+							var name = statesDict[row[1].v];
+							var tooltip = name + "<br><br>" + "Start: " + row[4].v + "<br>End: " + row[5].v + "<br>Duration: " + (row[5].v - row[4].v) + " ms";
+							var superitem  = {id: id, content: name, title: tooltip, group: row[groupColumn].v, subgroup: '1', start: row[4].v, end: row[5].v};
+							
+							var typematches = new vis.DataSet();
+							if (superitems[superitem.content])
+							{
+								typematches = (superitems[superitem.content])[superitem.group];
+								if (!typematches)
+								{
+									typematches = new vis.DataSet();
+								}
+							}
+							
+							var timematches = typematches.get({
+								filter: function (match) {
+									var overlap = false;
+									if (superitem.start == match.start)
+									{
+										overlap = true;
+									}
+									else if (superitem.start < match.start)
+									{
+										overlap = (match.start - superitem.end) < 1000;
+									}
+									else
+									{
+										overlap = (superitem.start - match.end) < 1000;
+									}
+									
+									return overlap;
+								}
+							});
+							
+							if (timematches.length)
+							{
+								var match = timematches[0];
+								if(superitem.end < match.end)
+								{
+									superitem.end = match.end
+								}
+								
+								if(superitem.start > match.start)
+								{
+									superitem.start = match.start;
+								}
+								
+								superitem.id = match.id;
+								superitem.title = superitem.content + "<br><br>" + "Start: " + superitem.start + "<br>End: " + superitem.end + "<br>Duration: " + (superitem.end - superitem.start);
+								
+								(superitems[superitem.content])[superitem.group].update(superitem);
+							
+								groupsDict[superitem.group].update(superitem);
+							}
+							else
+							{
+								if (!(superitem.content in superitems))
+								{
+									superitems[superitem.content] = {};
+								}
+								
+								if (!(superitem.group in superitems[superitem.content]))
+								{
+									(superitems[superitem.content])[superitem.group] = new vis.DataSet();
+								}
+								
+								(superitems[superitem.content])[superitem.group].add(superitem);
+								
+								if (!(superitem.group in groupsDict))
+								{
+									groupsDict[superitem.group] = new vis.DataSet();
+								}
+							
+								groupsDict[superitem.group].add(superitem);
+								
+								
+								id++;
+							}
+							
+							// update the super group to contain the subgroup
+							var group = {id: row[groupColumn].v, content: row[contentColumn].v, showNested: false, nestedGroups: [subgroup.id]};
+							groups.update(group);
+							
+							var end = new Date();
+							time = time + (end - start);
+						}						
+					}
+					
+					console.log("i spent " + time + " messing with substates");
+					console.log("finished item list generation at " + new Date());
+					// console.log(groups);
+					
+					console.log(superitems);
+					
+					// merge the items and superitems into one list
+					for (var key in superitems)
+					{
+						for (var itemlist in superitems[key])
+						{
+							items.add(((superitems[key])[itemlist]).get());
+						}
+					}
+					
+				// SORT THE TEST VIEW GROUPS BY DURATION
+				if(testview.checked)
+				{
+					var groupList = [];
+					
+					for (group in groupsDict)
+					{
+						var g = idContent[group];
+						if (groupOrder.indexOf(g) < 0 && group in idContent)
+						{
+							var begin = ((groupsDict[group]).min('start')).start;
+							var obj = {group: group, time: begin};
+							groupList.push(obj);
+						}
+					}
+					
+					groupList.sort(function (a, b){
+						if (a.time < b.time)
+						{
+							return -1;
+						}
+						else if (a.time > b.time)
+						{
+							return 1;
+						}
+						else
+						{
+							return 0;
+						}
+					});
+					
+					for (i = 0; i < groupList.length; i++)
+					{
+						groupOrder.push(idContent[groupList[i].group]);
+					}
+				}
+				
+				console.log(groupsDict);
+				
+				// STACK THE ITEMS IF THEY OVERLAP
+					// seperate each item into subgroups
+					var groupids = groups.getIds();
+					for (i = 0; i < groupids.length; i++)
+					{
+						// split items by group
+						var itemgroup = groupsDict[groupids[i]];
+						itemgroup = itemgroup.get();
+						
+						// sort by time
+						itemgroup.sort(timeCompare);
+						
+						// keep track of all subgroups and their latest end time
+						var subgroups = {};
+						subgroups['1'] = itemgroup[0].end;
+						subgroupSize = 1;
+						
+						// assign items to an appropriate subgroup
+						for (j = 1; j < itemgroup.length; j++)
+						{
+							item = itemgroup[j];
+							count = 0;
+							for (subgroup in subgroups)
+							{
+								// check that there is no overlap
+								if (item.start > subgroups[subgroup])
+								{
+									// update subgroup and its latest end time
+									item.subgroup = subgroup;
+									items.update(item);
+									subgroups[subgroup] = item.end;
+									// console.log(item.subgroup);
+									break;
+								}
+								
+								count++;
+								
+								// need to add a new subgroup
+								if (count == subgroupSize)
+								{
+									subgroupSize++;
+									subgroups[subgroupSize.toString()] = item.end;
+									item.subgroup = subgroupSize.toString();
+									items.update(item);
+									// console.log(item.subgroup);
+									break;
+								}
+							}
+						}
+					}
+				
+				console.log("Finished stacking the items at " + new Date());
+				
+				// color according to the selected option
+				var statsview = document.getElementById('statsview');
+				toggleColor(statsview);
+					
+				console.log("Finished assigning colors to the items at " + new Date());
+				
+				// PLOT THE TIMELINE
+					var container = document.getElementById('timeline');
+					
+					// find the earliest start time and latest end time
+					var min = items.min('start').start;
+					var max = items.max('end').end;
+					
+					// set up the options
+					var options = {
+						editable: {remove: true},
+						groupEditable: true,
+						groupOrder: groupCompare,
+						groupTemplate: displayGroup,
+						margin: 0,
+						max: max, // earliest time
+						min: min, // latest time
+						onRemove: removeStates,
+						selectable: true,
+						stack: false,
+						stackSubgroups: true,
+						orientation: 'both', // axis on both top and bottom
+						zoomMax: 86400000 // one day max zoom out level
+					};
+					
+					console.log("started timeline " + new Date());
+					// plot the timeline
+					timeline = new vis.Timeline(container, items, groups, options);
+					console.log("finished timeline " + new Date());
+					
+					// add event listener
+					timeline.on('select', onSelect);
+					timeline.on('rangechanged', setup);
+					
+					var tzoffset = (new Date()).getTimezoneOffset() * 60000; //offset in milliseconds
+					var timemin = (new Date(min - tzoffset)).toISOString().slice(0,-1);
+					var timemax = (new Date(max - tzoffset)).toISOString().slice(0,-1);
+
+					//var timemin = min.toISOString().slice(0, -1);
+					//var timemax = max.toISOString().slice(0, -1);
+					document.getElementById("info").innerHTML = "<b>Information</b><br>Started: " + timemin + "<br>Ended: " + timemax + "<br>Total number of states (including super states): " + items.length + "<br>";
+					
+					document.getElementById("timeform").innerHTML = "<form><label for=\"time\"><br>Choose a time to move to:</label><input id=\"time\" type=\"datetime-local\" name=\"timezoom\" min=" + timemin + " max=" + timemax + "><input type=\"button\" id=\"moveButton\"value=\"Move\"></form>";
+					document.getElementById("time").step = ".001";
+					document.getElementById("time").value = timemin;
+					
+					var moveButton = document.getElementById("moveButton");
+					moveButton.onclick = function () {
+						var time = document.getElementById("time").value;
+						var options = {
+							animation: false
+						}
+						timeline.moveTo(new Date(time), options);
+					};
+					
+					// set up the reset button for hidden groups
+					document.getElementById("reset").innerHTML = "";
+					
+					var label = document.createElement('span');
+					label.innerHTML = "<br>Click to reset all hidden groups: ";
+					document.getElementById("reset").insertAdjacentElement('afterBegin',label);
+					
+					var resetButton = document.createElement('button');
+					resetButton.innerHTML = 'Reset';
+					resetButton.onclick = resetGroups;
+					document.getElementById("reset").insertAdjacentElement('beforeEnd',resetButton);
+					
+					// set up the reset button for hidden states
+					document.getElementById("statereset").innerHTML = "";
+					
+					var label = document.createElement('span');
+					label.innerHTML = "<br>Select hidden state: ";
+					document.getElementById("statereset").insertAdjacentElement('beforeEnd',label);
+					
+					var dropdown = document.createElement('select');
+					dropdown.id = "deleted";
+					document.getElementById("statereset").insertAdjacentElement('beforeEnd',dropdown);
+					var opt = document.createElement("option");
+					opt.value = " ";
+					opt.text = " ";
+					dropdown.add(opt);
+					
+					var resetButton = document.createElement('button');
+					resetButton.innerHTML = 'Reset';
+					resetButton.onclick = resetStates;
+					document.getElementById("statereset").insertAdjacentElement('beforeEnd',resetButton);
+					
+					var removed = {};
+					
+					// remove all same states from timeline
+					function removeStates(properties)
+					{					
+						var toRemove = items.getIds({
+							filter: function (item) {
+								return (item.content == properties.content);
+							}
+						});
+						
+						properties.style = prevSelected[properties.id];
+						items.update(properties)
+						
+						removed[properties.content] = items.get(toRemove);
+						items.remove(toRemove);
+						
+						var option = document.createElement("option");
+						option.value = properties.content;
+						option.text = properties.content;
+						
+						var drop = document.getElementById("deleted");
+						drop.add(option);
+					}
+					
+					// moves the timeline to the start and zooms in and out to trigger the stacking
+					function setup(properties)
+					{ 
+						timeline.off('rangechanged', setup);
+						timeline.moveTo(min);
+						timeline.zoomIn(.10);
+						timeline.zoomOut(.10);
+					}
+					
+					var prevSelected = {};
+					
+					function onSelect (properties) 
+					{
+						for (id in prevSelected)
+						{
+							var reset = items.get(id);
+							if(reset)
+							{
+								reset.style = prevSelected[id];
+								items.update(reset);
+							}
+						}
+						
+						prevSelected = {};
+						
+						var selected = items.get(properties.items);
+						
+						for(i = 0; i < selected.length; i++)
+						{
+							prevSelected[selected[i].id] = selected[i].style;
+							selected[i].style = "background-color: " + rgb(128, 128, 128) + "; border-color: " + rgb(100, 100, 100) + ";";
+							items.update(selected[i]);
+						}
+					}
+					
+					function resetStates()
+					{
+						var toReset = document.getElementById("deleted").value;
+						if (toReset != " " && toReset)
+						{
+							items.add(removed[toReset]);
+							delete removed[toReset];
+							var drop = document.getElementById("deleted");
+							for (var i=0; i< drop.length; i++)
+							{
+								if (drop.options[i].value == toReset )
+								{
+									drop.remove(i);
+								}
+							}
+						}
+					}
+				}
+			}
+			
+			function isHardware(id)
+			{
+				var testview = document.getElementById('testview');
+				if(testview.checked)
+				{
+					if(hardwareList.indexOf(id) < 0)
+					{
+						return 0;
+					}
+					else
+					{
+						return 3;
+					}
+				}
+				else
+				{
+					return 3;
+				}
+			}
+			
+			function toggleColor(checkbox)
+			{
+				if(typeof items !== 'undefined')
+				{
+					// generate statistics data only once
+					if(typeof mads == 'undefined' && typeof medians == 'undefined')
+					{
+						mads = {}; // dictionary (key: state value: MAD)
+						medians = {}; // dictionary (key: state value: median)
+							
+						for (state in states)
+						{
+							var mediandev = ss.medianAbsoluteDeviation(states[state]);
+							mads[state] = mediandev;
+							medians[state] = ss.median(states[state]);
+						}
+					}
+					
+					// generate colors only once
+					if(typeof colorMatcher == 'undefined')
+					{
+						// generate color list and events list
+						var eventTypes = items.distinct('content');
+						var colors = getColorList(eventTypes.length);
+						
+						// create table for matching the event to a color
+						colorMatcher = {};
+						for (i = 0; i < eventTypes.length; i++)
+						{
+							colorMatcher[eventTypes[i]] = colors[i];
+						}
+					}
+					
+					// assign statistics colors
+					if(checkbox.checked)
+					{	
+						var itemlist = items.get();
+						for (i = 0; i < itemlist.length; i++)
+						{
+							var duration = itemlist[i].end - itemlist[i].start;
+							var threshold = 4 * mads[itemlist[i].content];
+							
+							if (duration - medians[itemlist[i].content] > threshold)
+							{
+								itemlist[i].style = "background-color: rgb(239, 88, 88); border-color: rgb(183, 64, 64);";
+							}
+							else
+							{
+								//itemlist[i].style = "background-color: rgb(0,0,255); border-color: rgb(0,0,255);";
+								itemlist[i].style = null;
+							}
+						}
+						
+						items.clear();
+						items.add(itemlist);
+					}
+					else
+					{	
+						// assign regular colors to the items
+						var itemlist = items.get();
+						for (i = 0; i < itemlist.length; i++)
+						{
+							item = itemlist[i];
+							item.style = "background-color: " + colorMatcher[item.content] + "; border-color: " + colorMatcher[item.content] + ";";
+						}
+						
+						items.clear();
+						items.add(itemlist);
+					}
+				}
+			}
+			
+			function print(item)
+			{
+				console.log("Name: " + item.content + "\nId: " + item.id + "\nGroup(Subgroup): " + item.group + "(" +item.subgroup + ")\nStart: " + item.start + "\nEnd:   " + item.end + "\nStyle: " + item.style);
+			}
+			
+			function toggleView (checkbox)
+			{
+				if(typeof items !== 'undefined' && typeof workflowdata !== 'undefined')
+				{
+					// clean up
+					timeline.destroy();
+					
+					// redraw
+					createTimeline(workflowdata);
+				}
+			}
+			
+			// parses a string date value and returns a date object
+			function dateTimeReviver (key, value)
+			{
+				if (typeof value === 'string') 
+				{
+					var result = /(^\d\d\d\d-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?-\d+:\d+$)/.exec(value);
+					if (result) 
+					{
+						return new Date(value);
+					}
+				}
+				
+				return value;
+			}
+			
+			// compare the items by time
+			function timeCompare(a,b)
+			{
+				if (a.start < b.start)
+				{
+					return -1;
+				}
+				if (a.start > b.start)
+				{
+					return 1;
+				}
+				if (a.start == b.start)
+				{
+					// want to give preference to the longest processes
+					if(a.end - a.start > b.end - b.start)
+					{
+						return -1;
+					}
+					if (a.end - a.start < b.end - b.start)
+					{
+						return 1;
+					}
+				}
+				return 0;
+			}
+			
+			// sort the groups according to the XML configuration file
+			function groupCompare (a, b)
+			{
+				a = a.content;
+				b = b.content;
+				
+				for (i = 0; i < groupOrder.length; i++)
+				{
+					if(a == groupOrder[i])
+					{
+						return -1;
+					}
+					else if (b == groupOrder[i])
+					{
+						return 1;
+					}
+				}
+				
+				return strcmp(a, b);
+			}
+			
+			// compare two strings (like C# implementation)
+			function strcmp (a, b) {
+				if(a < b) { 
+					return -1; 
+				} else if(a > b) { 
+					return 1; 
+				} else {
+					return 0;
+				}
+			}
+			
+			// generate the group template with the hide button
+			function displayGroup(group)
+			{
+				if (!group){return null;}
+				var container = document.createElement('div');
+				var label = document.createElement('span');
+				label.innerHTML = group.content + ' ';
+				
+				container.insertAdjacentElement('afterBegin',label);
+				
+				var hide = document.createElement('button');
+				hide.innerHTML = 'hide';
+				hide.style.fontSize = 'small';
+				hide.addEventListener('click',function(){
+					groups.update({id: group.id, visible: false});
+					if(groups.get("Expanded" + group.id))
+					{
+						groups.update({id: "Expanded" + group.id, visible: false});
+					}
+				});
+				
+				if((group.id).indexOf("Expanded") == -1)
+				{
+					container.insertAdjacentElement('beforeEnd',hide);
+					
+					var testview = document.getElementById('testview');
+					if(testview.checked && testRow[group.id])
+					{
+						var row = document.createElement('span');
+						row.innerHTML = '<br>lane: ' + testRow[group.id];
+						row.style.fontSize = 'x-small';
+						container.insertAdjacentElement('beforeEnd', row);
+					}
+				}
+				
+				return container;
+			}
+			
+			// generates a list of n different colors
+			function getColorList(numColors) {
+				// error checking
+				var colors = [];
+				if (numColors  == 2) {
+					colors.push(rgb(255,0,0));
+					colors.push(rgb(0,255,0));
+					return colors;
+				} else if (numColors == 1) {
+					colors.push(rgb(255,0,0));
+					return colors;
+				} else if (numColors < 1) {
+					return colors;
+				}
+				
+				var dx = 1.0 / (numColors - 1);
+				for (i = 0; i < numColors; i++) {
+					var color = generateColor(i * dx);
+					colors.push(color);
+				}						
+				
+				return colors;
+			}
+			
+			// generate a "random" color
+			function generateColor(determiner) {
+				var r = 0.0;
+				var g = 0.0;
+				var b = 1.0;
+				
+				if (determiner >= 0.0 && determiner < 0.2) {
+					determiner = determiner / 0.2;
+					r = 0.0;
+					g = determiner;
+					b = 1.0;
+				} else if (determiner >= 0.2 && determiner < 0.4) {
+					determiner = (determiner - 0.2) / 0.2;
+					r = 0.0;
+					g = 1.0;
+					b = 1.0 - determiner;
+				} else if (determiner >= 0.4 && determiner < 0.6) {
+					x = (determiner - 0.4) / 0.2;
+					r = determiner;
+					g = 1.0;
+					b = 0.0;
+				} else if (determiner >= 0.6 && determiner < 0.8) {
+					determiner = (determiner - 0.6) / 0.2;
+					r = 1.0;
+					g = 1.0 - determiner;
+					b = 0.0;
+				} else if (determiner >= 0.8 && determiner <= 1.0) {
+					determiner = (determiner - 0.8) / 0.2;
+					r = 1.0;
+					g = 0.0;
+					b = determiner;
+				}
+				
+				// convert to 255 format
+				r = Math.ceil(r * 255);
+				g = Math.ceil(g * 255);
+				b = Math.ceil(b * 255);
+				
+				return rgb(r, g, b);
+			}
+			
+			// generates a CSS color string
+			function rgb(r, g, b) {
+				return ["rgb(",r,",",g,",",b,")"].join("");
+			}
+			
+			// resets all the hidden groups
+			// function to make all groups visible again
+			function resetGroups() {
+				groups.forEach(function(group){
+					if((group.id).indexOf("Expanded") == -1)
+					{
+						groups.update({id: group.id, visible: true});
+					}
+				});
+			}
+		</script>
+    </body>
+</html>
