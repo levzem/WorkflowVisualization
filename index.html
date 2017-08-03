@@ -9,9 +9,9 @@
     }
   </style>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.20.0/vis.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.20.1/vis.min.js"></script>
   <script src="https://unpkg.com/simple-statistics@4.1.0/dist/simple-statistics.min.js"></script>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.20.0/vis.min.css" rel="stylesheet" type="text/css" />
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.20.1/vis.min.css" rel="stylesheet" type="text/css" />
 </head>
     <body>
 		<input type="file" id="files" name="files[]" multiple />
@@ -45,8 +45,10 @@
 			// list containing the desired order of the different event types
 			groupOrder = [];
 			
+			// list containing all of the hardware ids
 			hardwareList = [];
 			
+			// the file pointer to the JSON file
 			var workflowdata;
 			
 			// listens for added files
@@ -133,7 +135,7 @@
 						}
 					}
 					
-					// check that an XML configuration file and a JSON file were selected
+					// check that a XML configuration file and a JSON file were selected
 					if (!config)
 					{
 						alert("Please select an XML configuration file");
@@ -196,13 +198,14 @@
 						groupOrder.push(events[i].childNodes[0].nodeValue);
 					}
 					
+					// get the hardware ids
 					var hardware = doc.getElementsByTagName("id")
 					for (i = 0; i < hardware.length; i++)
 					{
+						// hardware.text.value
 						hardwareList.push(hardware[i].childNodes[0].nodeValue);
 					}
 					
-					console.log(hardwareList);
 					console.log("Finished parsing the XML at " + new Date());
 				}
 			}
@@ -287,9 +290,9 @@
 								}
 							}
 							
+							// if not duplicate, add to look up tables and data array
 							if(!duplicate)
 							{
-								// add the row to the look up table
 								if (!(row[1].v in events))
 								{
 									events[row[1].v] = {};
@@ -356,8 +359,8 @@
 					
 					// generate the initial list of groups
 					groups = new vis.DataSet();
-					var idContent = {};
-					testRow = {};
+					var idContent = {}; // dictionary (key: group id value: group content)
+					testRow = {}; // dictionary (key: test barcode value: pcr lane)
 					
 					for (i = 0; i < rows.length; i++)
 					{
@@ -370,6 +373,7 @@
 							var group = {id: row[groupColumn].v, content: row[contentColumn].v};
 							groups.add(group);
 							idContent[group.id] = group.content;
+							
 							if (groupColumn == 0)
 							{
 								// individual test
@@ -531,10 +535,7 @@
 					
 					console.log("i spent " + time + " messing with substates");
 					console.log("finished item list generation at " + new Date());
-					// console.log(groups);
-					
-					console.log(superitems);
-					
+										
 					// merge the items and superitems into one list
 					for (var key in superitems)
 					{
@@ -580,9 +581,7 @@
 						groupOrder.push(idContent[groupList[i].group]);
 					}
 				}
-				
-				console.log(groupsDict);
-				
+								
 				// STACK THE ITEMS IF THEY OVERLAP
 					// seperate each item into subgroups
 					var groupids = groups.getIds();
@@ -614,7 +613,6 @@
 									item.subgroup = subgroup;
 									items.update(item);
 									subgroups[subgroup] = item.end;
-									// console.log(item.subgroup);
 									break;
 								}
 								
@@ -627,7 +625,6 @@
 									subgroups[subgroupSize.toString()] = item.end;
 									item.subgroup = subgroupSize.toString();
 									items.update(item);
-									// console.log(item.subgroup);
 									break;
 								}
 							}
@@ -652,6 +649,7 @@
 					// set up the options
 					var options = {
 						editable: {remove: true},
+						end: new Date(1000*60*8 + min.valueOf()),
 						groupEditable: true,
 						groupOrder: groupCompare,
 						groupTemplate: displayGroup,
@@ -662,6 +660,7 @@
 						selectable: true,
 						stack: false,
 						stackSubgroups: true,
+						start: min,
 						orientation: 'both', // axis on both top and bottom
 						zoomMax: 86400000 // one day max zoom out level
 					};
@@ -673,14 +672,11 @@
 					
 					// add event listener
 					timeline.on('select', onSelect);
-					timeline.on('rangechanged', setup);
 					
 					var tzoffset = (new Date()).getTimezoneOffset() * 60000; //offset in milliseconds
 					var timemin = (new Date(min - tzoffset)).toISOString().slice(0,-1);
 					var timemax = (new Date(max - tzoffset)).toISOString().slice(0,-1);
 
-					//var timemin = min.toISOString().slice(0, -1);
-					//var timemax = max.toISOString().slice(0, -1);
 					document.getElementById("info").innerHTML = "<b>Information</b><br>Started: " + timemin + "<br>Ended: " + timemax + "<br>Total number of states (including super states): " + items.length + "<br>";
 					
 					document.getElementById("timeform").innerHTML = "<form><label for=\"time\"><br>Choose a time to move to:</label><input id=\"time\" type=\"datetime-local\" name=\"timezoom\" min=" + timemin + " max=" + timemax + "><input type=\"button\" id=\"moveButton\"value=\"Move\"></form>";
@@ -751,15 +747,6 @@
 						
 						var drop = document.getElementById("deleted");
 						drop.add(option);
-					}
-					
-					// moves the timeline to the start and zooms in and out to trigger the stacking
-					function setup(properties)
-					{ 
-						timeline.off('rangechanged', setup);
-						timeline.moveTo(min);
-						timeline.zoomIn(.10);
-						timeline.zoomOut(.10);
 					}
 					
 					var prevSelected = {};
